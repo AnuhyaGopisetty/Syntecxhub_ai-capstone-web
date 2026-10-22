@@ -1,0 +1,427 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>End-to-End AI Capstone</title>
+
+<script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;font-family:Arial,sans-serif;background:#0b1020;
+  color:#eef2ff
+}
+header{
+  padding:22px;text-align:center;background:#151e35;
+  border-bottom:1px solid #33415e
+}
+header h1{margin:0 0 8px}
+header p{color:#a9b7d3;margin:0}
+main{
+  max-width:1100px;margin:25px auto;padding:0 16px;
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px
+}
+.panel{
+  background:#151e35;border:1px solid #33415e;
+  border-radius:14px;padding:20px;min-width:0
+}
+.wide{grid-column:1/-1}
+video{
+  width:100%;min-height:180px;max-height:300px;
+  background:#050914;border-radius:10px;object-fit:cover
+}
+button{
+  border:0;border-radius:8px;padding:11px 14px;
+  margin:5px 4px 5px 0;background:#6475f5;
+  color:white;cursor:pointer;font-weight:bold
+}
+button:disabled{opacity:.45;cursor:not-allowed}
+.secondary{background:#34435f}
+.danger{background:#a83d54}
+input{
+  width:100%;padding:12px;border-radius:8px;
+  border:1px solid #405071;background:#0b1020;color:white
+}
+#chat{
+  height:260px;overflow-y:auto;background:#0b1020;
+  padding:12px;border-radius:10px;margin:14px 0
+}
+.bubble{
+  padding:10px 12px;border-radius:10px;margin-bottom:10px;
+  max-width:90%;overflow-wrap:anywhere
+}
+.bot{background:#293752}
+.user{background:#4e5fd0;margin-left:auto}
+#output{
+  background:#0b1020;padding:15px;border-radius:10px;
+  white-space:pre-wrap;overflow-wrap:anywhere;color:#a9f5c9
+}
+.status{color:#b8c7e5;min-height:24px}
+.note{font-size:13px;color:#9eacc7;line-height:1.5}
+.badge{color:#b9c8ff}
+footer{text-align:center;padding:20px;color:#9eacc7}
+@media(max-width:700px){
+  main{grid-template-columns:1fr}
+  .wide{grid-column:auto}
+}
+</style>
+</head>
+
+<body>
+<header>
+  <h1>🤖 AI Capstone Assistant</h1>
+  <p>Face Detection · Rule-Based Dialogue · Command Executor</p>
+  <p class="badge" id="authStatus">● Not authenticated</p>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>1. Face Detection</h2>
+    <video id="video" autoplay muted playsinline></video>
+    <p class="status" id="visionStatus">Camera not started.</p>
+    <button id="cameraBtn">Start Camera</button>
+    <button id="authBtn" disabled>Authenticate</button>
+    <p class="note">
+      Educational demo only: detecting a face does not verify identity
+      and must not be used for real access control.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>2. AI Chat Assistant</h2>
+    <div id="chat" aria-live="polite">
+      <div class="bubble bot">
+        Welcome! Start the camera and authenticate to begin.
+      </div>
+    </div>
+
+    <form id="commandForm">
+      <input id="commandInput" placeholder="Type hello, help, time..." required>
+      <button type="submit">Send Command</button>
+    </form>
+
+    <button class="secondary" id="voiceBtn">🎙 Voice Command</button>
+    <button class="secondary" id="helpBtn">Help</button>
+    <button class="danger" id="logoutBtn">Logout</button>
+  </section>
+
+  <section class="panel wide">
+    <h2>3. Command Executor</h2>
+    <p class="status" id="executionStatus">Waiting for a command.</p>
+    <div id="output">No action executed yet.</div>
+  </section>
+</main>
+
+<footer>End-to-End AI Capstone Project · Single-File Web App</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+
+const video = $("video");
+const cameraBtn = $("cameraBtn");
+const authBtn = $("authBtn");
+const voiceBtn = $("voiceBtn");
+const chat = $("chat");
+
+let stream = null;
+let faceDetected = false;
+let authenticated = false;
+let detectionTimer = null;
+
+/* ---------------- VISION MODULE ---------------- */
+
+async function startCamera(){
+  try{
+    if(!window.faceapi){
+      throw new Error("Face detection library is unavailable. Check your internet connection.");
+    }
+
+    $("visionStatus").textContent = "Loading face detection model...";
+
+    await faceapi.nets.tinyFaceDetector.loadFromUri(
+      "https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights"
+    );
+
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:"user"},
+      audio:false
+    });
+
+    video.srcObject = stream;
+    await video.play();
+
+    cameraBtn.disabled = true;
+    authBtn.disabled = false;
+    $("visionStatus").textContent = "Camera active. Looking for a face...";
+
+    detectionTimer = setInterval(async()=>{
+      if(!video.videoWidth || video.readyState < 2) return;
+
+      try{
+        const result = await faceapi.detectSingleFace(
+          video,
+          new faceapi.TinyFaceDetectorOptions()
+        );
+
+        faceDetected = Boolean(result);
+
+        $("visionStatus").textContent = faceDetected
+          ? "✅ Face detected"
+          : "No face detected. Look toward the camera.";
+      }catch(error){
+        faceDetected = false;
+        $("visionStatus").textContent = "Face detection error.";
+      }
+    },500);
+
+  }catch(error){
+    $("visionStatus").textContent = error.message;
+  }
+}
+
+/* ---------------- DEMO AUTH MODULE ---------------- */
+
+function authenticate(){
+  if(!faceDetected){
+    $("visionStatus").textContent = "Please show your face first.";
+    return;
+  }
+
+  authenticated = true;
+  $("authStatus").textContent = "● Demo authenticated";
+  $("visionStatus").textContent = "Demo authentication successful.";
+  addMessage("Authentication successful. How can I help you?");
+}
+
+/* ---------------- DIALOGUE MODULE ---------------- */
+
+const rules = [
+  {
+    keywords:["hello","hi","hey"],
+    reply:"Hello! I am your AI Capstone Assistant."
+  },
+  {
+    keywords:["help","commands"],
+    reply:"Commands: hello, help, time, status, open dashboard, logout."
+  },
+  {
+    keywords:["time","clock"],
+    reply:()=> "Current time: " + new Date().toLocaleString()
+  },
+  {
+    keywords:["open dashboard","dashboard"],
+    reply:"Opening the demo dashboard.",
+    action:"dashboard"
+  },
+  {
+    keywords:["status","system status"],
+    reply:"All demo modules are running.",
+    action:"status"
+  },
+  {
+    keywords:["logout","sign out"],
+    reply:"You have requested logout.",
+    action:"logout"
+  }
+];
+
+function processMessage(message){
+  const text = message.trim().toLowerCase();
+
+  if(!text){
+    return {reply:"Please enter a command."};
+  }
+
+  const rule = rules.find(item =>
+    item.keywords.some(keyword =>
+      text === keyword || text.includes(keyword)
+    )
+  );
+
+  if(!rule){
+    return {
+      reply:"Sorry, I don't understand. Type help to see available commands."
+    };
+  }
+
+  return {
+    reply:typeof rule.reply === "function"
+      ? rule.reply()
+      : rule.reply,
+    action:rule.action || null
+  };
+}
+
+/* ---------------- COMMAND EXECUTOR ---------------- */
+
+function executeCommand(action){
+  const actions = {
+    dashboard:()=>{
+      $("executionStatus").textContent = "Dashboard action completed";
+      $("output").textContent =
+        "Dashboard opened successfully (demo action).\n" +
+        "In a larger project, this could navigate to another page.";
+    },
+
+    status:()=>{
+      $("executionStatus").textContent = "System status";
+      $("output").textContent =
+        "Vision module: loaded\n" +
+        "Dialogue module: active\n" +
+        "Command executor: active";
+    }
+  };
+
+  if(!actions[action]){
+    $("executionStatus").textContent = "No executable action";
+    return;
+  }
+
+  actions[action]();
+}
+
+/* ---------------- CHAT UI ---------------- */
+
+function addMessage(message,type="bot"){
+  const div = document.createElement("div");
+  div.className = "bubble " + type;
+  div.textContent = message;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function sendCommand(message){
+  if(!authenticated){
+    addMessage("Please authenticate before using commands.");
+    return;
+  }
+
+  addMessage(message,"user");
+
+  const result = processMessage(message);
+  addMessage(result.reply);
+
+  if(result.action === "logout"){
+    logout();
+    return;
+  }
+
+  if(result.action){
+    executeCommand(result.action);
+  }
+}
+
+/* ---------------- VOICE INPUT ---------------- */
+
+const SpeechRecognition =
+  window.SpeechRecognition || window.webkitSpeechRecognition;
+
+if(!SpeechRecognition){
+  voiceBtn.disabled = true;
+  voiceBtn.textContent = "Voice not supported in this browser";
+}else{
+  voiceBtn.addEventListener("click",()=>{
+    if(!authenticated){
+      addMessage("Please authenticate before using voice commands.");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+
+    voiceBtn.disabled = true;
+    voiceBtn.textContent = "Listening...";
+
+    recognition.onresult = event=>{
+      const transcript = event.results[0][0].transcript;
+      $("commandInput").value = transcript;
+      sendCommand(transcript);
+    };
+
+    recognition.onerror = ()=>{
+      addMessage("Voice recognition failed. Try typing instead.");
+    };
+
+    recognition.onend = ()=>{
+      voiceBtn.disabled = false;
+      voiceBtn.textContent = "🎙 Voice Command";
+    };
+
+    try{
+      recognition.start();
+    }catch(error){
+      voiceBtn.disabled = false;
+      voiceBtn.textContent = "🎙 Voice Command";
+      addMessage("Could not start voice recognition.");
+    }
+  });
+}
+
+/* ---------------- EVENT HANDLERS ---------------- */
+
+cameraBtn.addEventListener("click",startCamera);
+authBtn.addEventListener("click",authenticate);
+
+$("commandForm").addEventListener("submit",event=>{
+  event.preventDefault();
+
+  const input = $("commandInput");
+  const message = input.value.trim();
+
+  if(!message) return;
+
+  input.value = "";
+  sendCommand(message);
+});
+
+$("helpBtn").addEventListener("click",()=>{
+  sendCommand("help");
+});
+
+function logout(){
+  authenticated = false;
+  $("authStatus").textContent = "● Not authenticated";
+  $("visionStatus").textContent = "Logged out.";
+
+  if(stream){
+    stream.getTracks().forEach(track=>track.stop());
+    stream = null;
+  }
+
+  if(detectionTimer){
+    clearInterval(detectionTimer);
+    detectionTimer = null;
+  }
+
+  video.srcObject = null;
+  faceDetected = false;
+  cameraBtn.disabled = false;
+  authBtn.disabled = true;
+
+  $("executionStatus").textContent = "Session ended";
+  $("output").textContent = "No action executed.";
+  addMessage("Logged out. Restart the camera to begin again.");
+}
+
+$("logoutBtn").addEventListener("click",()=>{
+  if(authenticated){
+    logout();
+  }else{
+    addMessage("You are already logged out.");
+  }
+});
+
+window.addEventListener("beforeunload",()=>{
+  if(detectionTimer) clearInterval(detectionTimer);
+
+  if(stream){
+    stream.getTracks().forEach(track=>track.stop());
+  }
+});
+</script>
+</body>
+</html>
